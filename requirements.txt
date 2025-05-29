@@ -1,4 +1,4 @@
 fastapi
-uvicorn
+uvicorn[standard]
+requests
 python-dotenv
-# Agrega aquí cualquier otra librería que uses
