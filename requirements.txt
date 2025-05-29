@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+python-dotenv
+# Agrega aquí cualquier otra librería que uses
