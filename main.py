@@ -60,9 +60,21 @@ def get_shoe_prices() -> List[str]:
     for prod in product_db:
         precio = prod.get("precio_producto")
         if precio:
-            # Convertir a string y agregar el símbolo €
-            prices.append(f"{precio} €")
+            prices.append(f"{precio} $")
     return prices
+
+# Función para filtrar las consultas no relacionadas con productos
+def is_relevant_query(query: str) -> bool:
+    # Definir temas que no tienen que ver con la tienda de zapatos
+    irrelevant_keywords = [
+        "clima", "fútbol", "noticias", "política", "presidente", "celebridad", "deportes",
+        "película", "música", "chisme", "recomendaciones", "anime", "juegos", "economía", 
+        "historia", "geografía", "viajes", "cultura", "religión", "salud", "educación", 
+        "matemáticas", "ciencia", "filosofía", "programación", "computación", "astronomía", 
+        "tecnología", "literatura", "arte", "personajes históricos", "famosos", "espectáculos", 
+        "concursos", "polémica", "debate", "sociales", "polemica", "viajes", "celebridades"
+    ]
+    return not any(keyword in query.lower() for keyword in irrelevant_keywords)
 
 @app.post("/process-products")
 def process_products(request: ProductRequest):
@@ -71,23 +83,23 @@ def process_products(request: ProductRequest):
     product_db = request.products
     print("Payload recibido:", request.dict())
 
+    # Instrucción modificada para obtener solo las tallas
     product_instruction = (
         "Eres un asistente de una tienda de zapatos online. "
-        "Analiza la siguiente información de productos y genera una respuesta breve y clara sobre ellos:\n\n"
+        "Analiza la siguiente información de productos y responde SOLO con las tallas disponibles para cada uno, sin agregar detalles extra:\n\n"
+        "Asegúrate de incluir SOLO las tallas disponibles para los productos y nada más."
     )
-    
-    # Construir los detalles del producto con datos reales
-    product_details = ""
+
+    # Construir los detalles de las tallas de los productos
+    sizes_details = ""
     for product in request.products:
-        # Puedes ajustar qué campos incluir en la respuesta
-        product_details += f"ID: {product.get('id_producto')}, Tipo: {product.get('tipo_producto')}, Nombre: {product.get('nombre_producto')}, Precio: {product.get('precio_producto')} €, "
         variantes = product.get("variantes", [])
-        if variantes:
-            tallas = ", ".join([var.get("talla", "") for var in variantes])
-            product_details += f"Tallas: {tallas}"
-        product_details += "\n"
-    
-    full_prompt = product_instruction + product_details.strip()
+        tallas = ", ".join([var.get("talla", "") for var in variantes])
+        if tallas:
+            sizes_details += f"Tallas disponibles: {tallas}\n"
+
+    # Solo devolvemos las tallas
+    full_prompt = product_instruction + sizes_details.strip()
 
     headers = {
         "Authorization": f"Bearer {HF_API_KEY}",
@@ -114,6 +126,15 @@ def process_products(request: ProductRequest):
         if response.status_code == 200:
             result = response.json()
             generated_text = result[0]["generated_text"].replace(full_prompt, "").strip()
+            generated_text = generated_text.strip('"')  # elimina las comillas dobles al inicio y al final
+
+            # Cortar la respuesta por salto de línea y usar solo la primera parte útil
+            generated_text = generated_text.split("\n")[0].strip()
+
+            # Si la respuesta no es útil o no tiene tallas, devuelve un mensaje estándar
+            if not generated_text or "no tengo" in generated_text.lower():
+                return {"reply": "No encontré información sobre las tallas disponibles. ¿Podrías intentar con otra pregunta?"}
+
             return {"reply": generated_text}
         else:
             return {"error": f"Error Hugging Face {response.status_code}: {response.text}"}
@@ -123,103 +144,94 @@ def process_products(request: ProductRequest):
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    try:
-        print(f"Received request: {request}")
-    except Exception as e:
-        return {"reply": "Error al procesar la solicitud."}
-
-    # Validar que existan mensajes y que cada uno tenga contenido
     if not request.inputs or not all(hasattr(msg, "content") and msg.content for msg in request.inputs):
-         return {"reply": "La solicitud debe incluir mensajes válidos."}
+        return {"reply": "La solicitud debe incluir mensajes válidos."}
 
-    # Reconstruir la consulta completa y convertir a minúsculas para validar
-    conversation_history = " ".join([msg.content.strip() for msg in request.inputs])
-    lower_conversation = conversation_history.lower()
+    user_query = request.inputs[-1].content.strip()
+    lower_query = user_query.lower()
 
-    # Lista de palabras clave generales relacionadas con calzado
-    keywords = ["zapato", "calzado", "bota", "sandalia", "zapatilla","tallas","precio", "nombre", "tipos de zapatos", "disponibles"]
-    if not any(keyword in lower_conversation for keyword in keywords):
-         return {"reply": "Lo siento, no tengo información sobre eso."}
+    # Filtrar preguntas irrelevantes
+    if not is_relevant_query(user_query):
+        return {"reply": "Lo siento, solo puedo responder preguntas relacionadas con nuestra tienda de zapatos. ¿En qué más te puedo ayudar?"}
 
-    # Instrucción base para el asistente:
-    # - Responder únicamente con la información de productos almacenada en la tienda (product_db).
-    # - No autogenerar preguntas adicionales ni repetir la consulta original.
-    base_instruction = (
-        "Eres un asistente de una tienda de zapatos online. "
-        "Debes responder únicamente basándote en la información disponible en la tienda, que se obtiene de la base de datos real. "
-        "Utiliza exclusivamente los siguientes datos: "
-        "Tipos: {tipos}, Nombres: {nombres}, Tallas: {tallas}, Precios: {precios}. "
-        "No incluyas preguntas adicionales ni repitas la consulta del usuario. "
-        "Responde en forma breve y precisa. "
-        "Si la consulta no se relaciona directamente con la información de la tienda, responde: 'Lo siento, no tengo información sobre eso.'\n\n"
-    ).format(
-         tipos=", ".join(get_shoe_types()),
-         nombres=", ".join(get_shoe_names()),
-         tallas=", ".join(get_shoe_sizes()),
-         precios=", ".join(get_shoe_prices())
+    # Respuestas rápidas predefinidas
+    saludos = ["hola", "buenas", "hey", "qué tal"]
+    agradecimientos = ["gracias", "muchas gracias", "te lo agradezco"]
+
+    if any(s in lower_query for s in saludos):
+        return {"reply": "¡Hola! ¿En qué puedo ayudarte con nuestros zapatos?"}
+    if any(a in lower_query for a in agradecimientos):
+        return {"reply": "¡De nada! Si necesitas algo más, estaré encantado de ayudarte."}
+
+    # Ajustamos para que solo se respondan las tallas disponibles sin agregar detalles extra
+    if "tallas" in lower_query:
+        available_sizes = get_shoe_sizes()
+        if available_sizes:
+            return {"reply": f"Las tallas disponibles son: {', '.join(available_sizes)}."}
+        else:
+            return {"reply": "No tenemos tallas disponibles en este momento."}
+
+    # Datos de productos en formato estructurado por producto
+    prompt_header = (
+        "Eres un asistente para una tienda online de zapatos. Usa los siguientes productos para responder la consulta del cliente.\n\n"
     )
 
-    # Construir additional_info según palabras clave específicas:
-    additional_info = ""
-    # Si se pregunta específicamente por tipos
-    if "tipos de zapatos" in lower_conversation or "disponibles" in lower_conversation:
-         additional_info = f"Tipos disponibles: {', '.join(get_shoe_types())}.\n\n"
-    # Si se pregunta por nombres
-    if "nombre" in lower_conversation:
-         additional_info = f"Nombres disponibles: {', '.join(get_shoe_names())}.\n\n"
-    # Si se pregunta por tallas
-    if "talla" in lower_conversation:
-         additional_info = f"Tallas disponibles: {', '.join(get_shoe_sizes())}.\n\n"
-    # Si se pregunta por precios
-    if "precio" in lower_conversation or "valen" in lower_conversation:
-         additional_info = f"Precios disponibles: {', '.join(get_shoe_prices())}.\n\n"
+    product_details = ""
+    for i, product in enumerate(product_db):
+        nombre = product.get("nombre_producto", "Desconocido")
+        tipo = product.get("tipo_producto", "Desconocido")
+        precio = f"{product.get('precio_producto')} $" if product.get("precio_producto") else "Precio no disponible"
+        tallas = ", ".join(var.get("talla", "") for var in product.get("variantes", [])) or "No disponibles"
+        product_details += (
+            f"Producto {i+1}:\n"
+            f"- Tipo: {tipo}\n"
+            f"- Nombre: {nombre}\n"
+            f"- Tallas: {tallas}\n"
+            f"- Precio: {precio}\n\n"
+        )
 
-    full_prompt = base_instruction + additional_info + "Consulta: " + conversation_history
+    prompt = (
+        prompt_header + product_details + f"Consulta del cliente: {user_query}\n"
+        "Responde con la información relevante sin inventar ni repetir la pregunta."
+    )
 
     headers = {
-         "Authorization": f"Bearer {HF_API_KEY}",
-         "Content-Type": "application/json"
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json"
     }
 
     data = {
-         "inputs": full_prompt,
-         "parameters": {
-              "temperature": 0.5,
-              "max_new_tokens": 100,
-              "do_sample": False,
-              "top_p": 0.9,
-         }
+        "inputs": prompt,
+        "parameters": {
+            "temperature": 0.4,
+            "max_new_tokens": 150,
+            "do_sample": False,
+            "top_p": 0.9,
+        }
     }
 
     try:
-         response = requests.post(
-             "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
-             headers=headers,
-             json=data
-         )
-         if response.status_code == 200:
-             try:
-                 result = response.json()
-             except Exception as e:
-                 return {"reply": "Error al interpretar la respuesta de la IA."}
-             
-             generated_text = result[0]["generated_text"].replace(full_prompt, "").strip()
-             
-             # Validaciones específicas para asegurar que la respuesta incluya lo solicitado:
-             if ("precio" in lower_conversation or "valen" in lower_conversation) and "€" not in generated_text:
-                 return {"reply": "La respuesta generada no contiene la información de precios de la tienda."}
-             if ("talla" in lower_conversation) and not any(size in generated_text for size in get_shoe_sizes()):
-                 return {"reply": "La respuesta generada no contiene la información de tallas de la tienda."}
-             if ("nombre" in lower_conversation) and not any(name.lower() in generated_text.lower() for name in get_shoe_names()):
-                 return {"reply": "La respuesta generada no contiene la información de nombres de la tienda."}
-             if ("tipos de zapatos" in lower_conversation) and not any(tp.lower() in generated_text.lower() for tp in get_shoe_types()):
-                 return {"reply": "La respuesta generada no contiene la información de tipos de zapatos de la tienda."}
-             
-             # Evitar respuestas que autogeneren preguntas adicionales
-            
-             
-             return {"reply": generated_text}
-         else:
-             return {"error": f"Error Hugging Face {response.status_code}: {response.text}"}
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            headers=headers,
+            json=data
+        )
+
+        if response.status_code != 200:
+            return {"error": f"Error Hugging Face {response.status_code}: {response.text}"}
+
+        result = response.json()
+        generated_text = result[0]["generated_text"].replace(prompt, "").strip()
+        generated_text = generated_text.strip('"')  # elimina las comillas dobles al inicio y al final
+
+        # Cortar la respuesta por salto de línea y usar solo la primera parte útil
+        generated_text = generated_text.split("\n")[0].strip()
+
+        # ✅ Si la respuesta no es útil, se retorna un mensaje de error
+        if not generated_text or "no tengo" in generated_text.lower():
+            return {"reply": "No encontré información específica para esa consulta. ¿Podrías intentar con otra pregunta?"}
+
+        return {"reply": generated_text}
+
     except requests.exceptions.RequestException as e:
-         return {"error": f"Error en la conexión: {str(e)}"}
+        return {"error": f"Error en la conexión: {str(e)}"}
