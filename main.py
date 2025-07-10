@@ -12,19 +12,15 @@ app = FastAPI()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 product_db: List[Any] = []
 
-
 class Message(BaseModel):
     role: str
     content: str
 
-
 class ChatRequest(BaseModel):
     inputs: List[Message]
 
-
 class ProductRequest(BaseModel):
     products: List[Any]
-
 
 # Helpers
 def get_shoe_sizes() -> List[str]:
@@ -36,11 +32,23 @@ def get_shoe_sizes() -> List[str]:
                 sizes.add(talla)
     return sorted(list(sizes))
 
+def get_product_names() -> List[str]:
+    return [prod.get("nombre_producto", "") for prod in product_db if prod.get("nombre_producto")]
+
+def find_similar_products(query: str) -> List[str]:
+    similares = []
+    for prod in product_db:
+        nombre = prod.get("nombre_producto", "")
+        if nombre and query.lower() in nombre.lower():
+            similares.append(nombre)
+    return similares
 
 def is_relevant_query(query: str) -> bool:
-    irrelevantes = ["clima", "política", "juegos", "presidente", "celebridad", "salud", "religión"]
+    irrelevantes = [
+        "clima", "política", "juegos", "presidente", "celebridad",
+        "salud", "religión", "noticias", "deportes", "famosos"
+    ]
     return not any(pal in query.lower() for pal in irrelevantes)
-
 
 def call_llama3(messages: List[dict]) -> str:
     try:
@@ -53,7 +61,7 @@ def call_llama3(messages: List[dict]) -> str:
             json={
                 "model": "llama3-70b-8192",
                 "messages": messages,
-                "temperature": 0.7
+                "temperature": 0.6
             }
         )
         if response.status_code == 200:
@@ -61,7 +69,6 @@ def call_llama3(messages: List[dict]) -> str:
         return "Lo siento, hubo un problema al responder. Intenta nuevamente."
     except Exception as e:
         return f"Error al conectar con la IA: {str(e)}"
-
 
 @app.post("/process-products")
 def process_products(request: ProductRequest):
@@ -82,7 +89,6 @@ def process_products(request: ProductRequest):
         "reply": "Tallas disponibles por producto:\n" + "\n".join(sizes_summary)
     }
 
-
 @app.post("/chat")
 def chat(request: ChatRequest):
     if not request.inputs:
@@ -92,20 +98,19 @@ def chat(request: ChatRequest):
     lower_query = query.lower()
 
     if not is_relevant_query(query):
-        return {"reply": "Solo puedo responder sobre nuestros productos de calzado. ¿En qué más te ayudo?"}
+        return {"reply": "Solo puedo ayudarte con productos de nuestra tienda de zapatos. ¿Quieres ver opciones?"}
 
-    # Respuestas rápidas
     if any(p in lower_query for p in ["hola", "buenas", "hey"]):
-        return {"reply": "¡Hola! ¿En qué puedo ayudarte con nuestros zapatos?"}
+        return {"reply": "¡Hola! Soy Coco 🐾, tu asistente virtual. ¿Buscas algo en especial hoy?"}
     if any(p in lower_query for p in ["gracias", "muchas gracias"]):
-        return {"reply": "¡Con gusto! Si necesitas más ayuda, estaré aquí."}
+        return {"reply": "¡Con gusto! Si necesitas más ayuda, estaré aquí 😊."}
     if "talla" in lower_query:
         tallas = get_shoe_sizes()
         return {
-            "reply": f"Tallas disponibles: {', '.join(tallas)}." if tallas else "No hay tallas disponibles."
+            "reply": f"Estas son las tallas disponibles actualmente: {', '.join(tallas)}."
+            if tallas else "Por ahora no hay tallas disponibles."
         }
 
-    # Construir contexto de productos
     productos_texto = []
     for prod in product_db:
         nombre = prod.get("nombre_producto", "Producto")
@@ -115,10 +120,29 @@ def chat(request: ChatRequest):
         tallas_str = ", ".join(sorted(tallas)) if tallas else "No disponibles"
         productos_texto.append(f"- {nombre} ({tipo}) | Precio: {precio} | Tallas: {tallas_str}")
 
+    productos_disponibles = get_product_names()
+    similares = find_similar_products(query)
+
+    extra_msg = ""
+    if not similares and any(n in lower_query for n in productos_disponibles):
+        extra_msg = "Lamentablemente no tenemos ese producto, pero puedo recomendarte otros similares."
+
     messages = [
-        {"role": "system", "content": "Eres un asistente amigable y profesional de una tienda de zapatos online. Responde con claridad y sin inventar."},
-        {"role": "user", "content": "Estos son los productos disponibles:\n" + "\n".join(productos_texto)},
-        {"role": "user", "content": query}
+        {
+            "role": "system",
+            "content": (
+                "Eres Coco 🐾, un asistente de una tienda de zapatos online. Responde de forma amable, clara y sólo en base a la información proporcionada."
+                " Si el producto no existe, ofrece sugerencias similares. No inventes ni hables de temas ajenos."
+            )
+        },
+        {
+            "role": "user",
+            "content": "Estos son los productos disponibles:\n" + "\n".join(productos_texto)
+        },
+        {
+            "role": "user",
+            "content": (extra_msg + "\n" if extra_msg else "") + query
+        }
     ]
 
     reply = call_llama3(messages)
