@@ -118,7 +118,8 @@ def process_products(request: ProductRequest):
 
     try:
         response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+,
             headers=headers,
             json=data
         )
@@ -212,7 +213,8 @@ def chat(request: ChatRequest):
 
     try:
         response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3",
+            "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+,
             headers=headers,
             json=data
         )
